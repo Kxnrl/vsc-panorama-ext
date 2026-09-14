@@ -12,9 +12,13 @@ import {
 import type { SettingKey } from '../../src/core/diagnostics/types';
 
 describe('扩展清单（规格 §13 跨编辑器兼容硬约束）', () => {
-  it('engines.vscode 保持保守下限 ^1.85.0', () => {
-    // 各 VSCode 分支基线落后于上游，版本号写高会导致装不上
-    expect(manifest.engines?.vscode).toBe('^1.85.0');
+  it('engines.vscode 下限是 MCP 稳定 API 的最低版 ^1.101.0', () => {
+    // 原为 ^1.85.0（各分支基线落后于上游，写高装不上）。引入嵌入式 MCP 后
+    // 门槛由 vscode.lm.registerMcpServerDefinitionProvider 的稳定线决定：
+    // 1.100 及以前它只在 proposed API 里（bisect @types/vscode 的 vscode.d.ts，
+    // 1.101.0 起收录）。这是刻意拍板的取舍——老版本用户升不上新版，但换来
+    // 原生 agent 通道零 proposed API 依赖。再要动这个数，先重跑那次 bisect。
+    expect(manifest.engines?.vscode).toBe('^1.101.0');
   });
 
   it('不声明任何 proposed API', () => {

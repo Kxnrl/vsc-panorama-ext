@@ -1,0 +1,196 @@
+name: Release
+
+# 完全对照 vscode-ssh-config-all-in-one 的 release.yml：
+# 发版 = Actions 页面手动 dispatch，输入版本号（可带 v 前缀）与 beta 开关。
+# 工作流自己 bump package.json、打 tag、推回仓库，然后打包、发 GitHub
+# Release、发 Marketplace——本地一个命令都不用跑。
+#
+# 与参考仓库的三处刻意差异：
+# - npm 而非 pnpm（本仓库的包管理器）；
+# - 没有 develop 分支同步段（本仓库是 master 单分支，参考仓库的
+#   sync-develop 那套不适用）；
+# - 多一道「VSIX 必须包含 MCP daemon」守卫（本仓库的双入口打包是承重件）。
+#
+# 需要 repo secret：VSCE_PAT（Visual Studio Marketplace 的 personal access
+# token，Read & Manage 权限）。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.2.3)"
+        required: true
+        type: string
+      beta:
+        description: "prerelease (beta)"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write # bump 提交、tag 推送、创建 GitHub Release
+
+# 发版永远排队不取消：bump+tag 是写操作，两条 dispatch 抢跑会互相覆盖
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      release_notes: ${{ steps.release_notes.outputs.NOTES }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # release notes 要看 tag 历史
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          # Use the workflow input `version` as the current tag (ensure v-prefix)
+          if [[ "${{ github.event.inputs.version }}" == v* ]]; then
+            CURRENT_TAG=${{ github.event.inputs.version }}
+          else
+            CURRENT_TAG=v${{ github.event.inputs.version }}
+          fi
+          LAST_TAG=$(git tag --sort=-creatordate | grep -v 'beta' | head -n 1)
+
+          if [ -z "$LAST_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" --no-merges)
+            COMPARE_LINK="https://github.com/${{ github.repository }}/commits/${CURRENT_TAG}"
+          else
+            COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s" --no-merges)
+            COMPARE_LINK="https://github.com/${{ github.repository }}/compare/${LAST_TAG}...${CURRENT_TAG}"
+          fi
+
+          echo "NOTES<<EOF" >> $GITHUB_OUTPUT
+          echo "## Release ${CURRENT_TAG}" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "Changes in this release:" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "---" >> $GITHUB_OUTPUT
+          echo "See full changelogs: [${LAST_TAG}...${CURRENT_TAG}](${COMPARE_LINK})" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  build-and-release:
+    runs-on: ubuntu-latest
+    needs: setup
+
+    steps:
+      # action 版本基线：2026-08-23 核实的最新 major（checkout v7 /
+      # setup-node v7 / action-gh-release v3）。写这份文件当时 GitHub API
+      # 不可达、未能当场复查——首次真实发版前请重跑一次版本核实。
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # 与 ci.yml 相同：990 文件语料闸门在没有 Valve 归档的机器上整套
+      # skip，不依赖归档的断言照常执行（tools/paths.mjs 顶部注释）。
+      # daemon.http.test.ts 在这里顺带验证了 mcp-daemon 产物能起服务。
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Determine if prerelease
+        id: prerelease
+        run: |
+          if [ "${{ github.event.inputs.beta }}" = "true" ] || [ "${{ github.event.inputs.beta }}" = "True" ]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract tag name
+        id: extract_tag
+        run: |
+          if [[ "${{ github.event.inputs.version }}" == v* ]]; then
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Bump package version and create tag
+        if: steps.extract_tag.outputs.tag != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+          # Normalize semver without leading v for npm version
+          if [[ "$INPUT_VERSION" == v* ]]; then
+            SEMVER=${INPUT_VERSION#v}
+          else
+            SEMVER=${INPUT_VERSION}
+          fi
+
+          TAG=v${SEMVER}
+
+          # Configure git author
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Skip if tag already exists
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists - skipping npm version"
+          else
+            npm version "$SEMVER" --no-git-tag-version
+            git add package.json package-lock.json
+            git commit -m "chore(release): $TAG"
+            git tag "$TAG"
+            git push origin HEAD
+            git push origin --tags
+          fi
+
+      - name: Package the extension
+        run: |
+          if [[ ${{ steps.prerelease.outputs.prerelease }} == 'true' ]]; then
+            npx --yes @vscode/vsce@3 package --pre-release -o vsc-panorama-ext-${{ steps.extract_tag.outputs.tag }}.vsix
+          else
+            npx --yes @vscode/vsce@3 package -o vsc-panorama-ext-${{ steps.extract_tag.outputs.tag }}.vsix
+          fi
+
+      # MCP daemon 是这个包的承重件：esbuild 双入口哪天配坏、.vscodeignore
+      # 哪天把 dist/ 排掉，构建与单测都可能照常绿，只有「VSIX 里到底有没有
+      # 这个文件」钉得住。
+      - name: VSIX 必须包含 MCP daemon
+        run: |
+          npx --yes @vscode/vsce@3 ls | grep -q '^dist/mcp-daemon\.cjs$' \
+            || { echo '::error::VSIX 里没有 dist/mcp-daemon.cjs——MCP 通道会整个缺失'; exit 1; }
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.extract_tag.outputs.tag }}
+          name: ${{ steps.extract_tag.outputs.tag }}
+          files: vsc-panorama-ext-${{ steps.extract_tag.outputs.tag }}.vsix
+          draft: false
+          prerelease: ${{ steps.prerelease.outputs.prerelease }}
+          generate_release_notes: false
+          body: ${{ needs.setup.outputs.release_notes }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to VSCode Marketplace
+        run: |
+          if [[ ${{ steps.prerelease.outputs.prerelease }} == 'true' ]]; then
+            npx --yes @vscode/vsce@3 publish --pre-release -p ${{ secrets.VSCE_PAT }}
+          else
+            npx --yes @vscode/vsce@3 publish -p ${{ secrets.VSCE_PAT }}
+          fi

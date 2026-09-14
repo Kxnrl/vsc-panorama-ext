@@ -147,4 +147,23 @@ export interface Diagnostic {
   readonly message: string;
   /** 替代写法。规格 §10.1 要求每条 warning 都给，不能只说「这个不行」 */
   readonly fix?: string;
+  /**
+   * 可机械执行的修复（同一处，文件绝对字符偏移，与 start/end 同一坐标系）。
+   *
+   * 只有**结论唯一**的修复才产出：`hidden`→`collapse`、`@keyframes` 补引号、
+   * `{d:`→`{s:` 这类改法不存在第二种合理答案；而 `display: flex` 换成什么、
+   * 内联 style 挪到哪个类，答案取决于作者意图——那些规则只有文字版 fix，
+   * 交给灯泡里的人或 MCP 对面的 agent 判断。
+   *
+   * 一条诊断的一组 edits 是**原子**的：applyFixEdits 应用时要么全上、
+   * 要么整条让位（与其它诊断的 edits 区间重叠时）。
+   */
+  readonly edits?: readonly FixEdit[];
+}
+
+/** 把 [start, end) 替换为 text。多个 edit 拼成一条修复 */
+export interface FixEdit {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
 }

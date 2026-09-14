@@ -188,6 +188,15 @@ export class PropertyRegistry {
     return Object.hasOwn(this.data.atRules, name) ? this.data.atRules[name] : undefined;
   }
 
+  /**
+   * 全部 at-rule 名。为 MCP 的「列出全部已知条目」加——那边不该为了取一份
+   * 名单去摸私有字段（types 层拿不到 data，只能 cast，而 cast 一旦遇上
+   * 重构就是静默 undefined）。
+   */
+  allAtRules(): readonly string[] {
+    return Object.keys(this.data.atRules);
+  }
+
   pseudoClasses(): readonly string[] {
     return this.data.pseudoClasses;
   }

@@ -1210,4 +1210,81 @@ suite('Panorama 扩展 · 真实编辑器', () => {
       `还原配置后应回到 4 面板，实际：${panelLabels(back).join(',')}`,
     );
   });
+
+  // -------------------------------------------------------------------------
+  // F. 嵌入式 MCP（真实宿主链路）
+  //
+  // 单元测试盖住的是「工具函数对、server 装配对」；daemon.http.test.ts 盖住的
+  // 是「构建产物在裸 node 里能跑」。这两层都够不到的，是**扩展宿主真的把
+  // daemon spawn 起来了**这条链路：ELECTRON_RUN_AS_NODE、extensionUri 定位
+  // dist/mcp-daemon.cjs、locale 传递、onStartupFinished 激活。任何一环断掉，
+  // 下面第一条就会红。
+  //
+  // 端口用默认 4377——正是用户不开任何配置时会得到的那个，别把测试接到
+  // 一条用户走不到的路径上。
+  // -------------------------------------------------------------------------
+
+  const MCP_BASE = 'http://127.0.0.1:4377';
+
+  async function healthUp(): Promise<boolean> {
+    try {
+      const res = await fetch(`${MCP_BASE}/health`, { signal: AbortSignal.timeout(1000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Streamable HTTP 的应答是 SSE 帧，抽出 data 行再 JSON.parse */
+  async function mcpRpc(method: string, params?: unknown, id = 1): Promise<unknown> {
+    const res = await fetch(`${MCP_BASE}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) }),
+    });
+    assert.equal(res.status, 200, `${method} 应答 200，实际 ${res.status}`);
+    const body = await res.text();
+    return JSON.parse(
+      body
+        .split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6))
+        .join(''),
+    ).result;
+  }
+
+  test('扩展激活后 MCP daemon 真的在服务（spawn 链路 + 默认端口）', async () => {
+    const up = await waitFor(() => Promise.resolve(healthUp()), (v) => v, 20_000);
+    assert.ok(up, '20s 内 daemon 未在 127.0.0.1:4377 就绪——扩展宿主的 spawn 链路断了');
+  });
+
+  test('真实宿主拉起的 daemon：validate 工具可用且走英文目录', async () => {
+    assert.ok(await healthUp(), '上一条用例之后 daemon 不该消失');
+
+    await mcpRpc('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'e2e', version: '0' },
+    });
+
+    const res = (await mcpRpc(
+      'tools/call',
+      {
+        name: 'validate',
+        arguments: { path: exampleUri('panorama/layout/custom_game/demo/diagnostics-demo.xml').fsPath },
+      },
+      2,
+    )) as { content: { text: string }[] };
+    const parsed = JSON.parse(res.content[0].text) as {
+      mode: string;
+      diagnostics: { ruleId: string; message: string }[];
+    };
+
+    assert.equal(parsed.mode, 'customHudLayout');
+    const buttonText = parsed.diagnostics.find((d) => d.ruleId === 'hud.buttonText');
+    assert.ok(buttonText, `应报出 hud.buttonText，实际：${parsed.diagnostics.map((d) => d.ruleId).join(',')}`);
+    // 与诊断那条 E2E 同一理由：真实宿主是英文界面，daemon 的 locale 由扩展
+    // spawn 时传入——这条断言钉住「扩展 -> daemon 的 locale 传递」没断
+    assert.match(buttonText.message, /^<Button> does not support a text attribute/);
+  });
 });

@@ -25,6 +25,22 @@ function mkHint(ruleId: RuleId, start: number, end: number, message: string, fix
   return { ruleId, severity: 'hint', start, end, message, fix };
 }
 
+/**
+ * 整个属性的删除区间：从属性名起、到值的右引号止，并向左吞掉**一个**分隔空白
+ * ——不吞的话 `<Panel  class=…` 会留下双空格。值未写完（unterminated / 无值）
+ * 的属性只删名字段。rootPanelId 与 hud.buttonText 共用；放这里是因为区间
+ * 语义与 judgeableAttributes 一样属于「对属性的结构性认知」。
+ */
+export function attributeSpan(text: string, attr: VxmlAttribute): { start: number; end: number } {
+  const end =
+    attr.value !== undefined && attr.valueStart !== undefined && !attr.unterminated
+      ? attr.valueEnd! + 1 // 右引号
+      : attr.nameEnd;
+  let start = attr.nameStart;
+  if (start > 0 && /[ \t]/.test(text[start - 1])) start -= 1;
+  return { start, end };
+}
+
 function* walkElements(els: readonly VxmlElement[]): Generator<VxmlElement> {
   for (const el of els) {
     yield el;
@@ -635,15 +651,42 @@ function checkRootPanelId(
     // `vxml.syntax` 两条 warning——那是最终评审 I-2 归在一起的同型第二处。
     const id = judgeableAttributes(text, panel).find((a) => a.name === 'id');
     if (!id) continue;
-    out.push(
-      mkWarning(
+    // 机械修复照 fix 文案办：把挂钩改成 class（名字保留），而不是删掉属性。
+    // 元素已有 class 时不能产出第二个 class 属性（非法 XML）——并入既有取值。
+    const attrs = judgeableAttributes(text, panel);
+    const classAttr = attrs.find((a) => a.name === 'class' && a !== id && !a.unterminated);
+    const span = attributeSpan(text, id);
+    const idVal = id.value;
+    let edits;
+    if (
+      classAttr &&
+      classAttr.valueStart !== undefined &&
+      classAttr.valueEnd !== undefined &&
+      classAttr.value !== undefined
+    ) {
+      // 已有 class：并入既有取值（`class="a X"`），两个 class 属性是非法 XML
+      const merged =
+        classAttr.value === '' || idVal === undefined
+          ? (idVal ?? classAttr.value)
+          : `${classAttr.value} ${idVal}`;
+      edits = [
+        { start: span.start, end: span.end, text: '' },
+        { start: classAttr.valueStart, end: classAttr.valueEnd, text: merged },
+      ];
+    } else {
+      // 没有 class：只改属性名，值原样保留
+      edits = [{ start: id.nameStart, end: id.nameEnd, text: 'class' }];
+    }
+    out.push({
+      ...mkWarning(
         'vxml.rootPanelId',
         id.nameStart,
         id.nameEnd,
         msg.vxml.rootPanelId(panel.tag),
         msg.vxml.rootPanelIdFix(),
       ),
-    );
+      edits,
+    });
   }
 }
 
@@ -831,15 +874,22 @@ function checkSyntax(doc: VxmlDocument, msg: Messages, out: Diagnostic[]): void 
       // 就照旧报——那是一处独立的遗漏。取最内层而不是最外层，是因为那里才是光标
       // 所在，而且补上一个闭合标签之后下一条会自动浮出来，逐层收敛。
       if (el.children.some((c) => unterminated(text, c))) continue;
-      out.push(
-        mkWarning(
+      // 机械化修复：在元素内容末尾（最后一个子元素之后；无子元素则在开始标签
+      // 之后）插入换行 + 与开始标签同缩进的 </tag>。这条只报最内层，应用后
+      // 下一层会自己浮出来——修复循环逐层收敛，与诊断的逐层浮现是对称的。
+      const insertAt = el.children.length > 0 ? el.children[el.children.length - 1].end : el.openEnd;
+      const lineStart = text.lastIndexOf('\n', el.tagStart) + 1;
+      const indent = /^[ \t]*/.exec(text.slice(lineStart, el.tagStart))![0];
+      out.push({
+        ...mkWarning(
           'vxml.syntax',
           el.tagNameStart,
           el.tagNameEnd,
           msg.vxml.missingCloseTag(el.tag),
           msg.vxml.missingCloseTagFix(el.tag),
         ),
-      );
+        edits: [{ start: insertAt, end: insertAt, text: `\n${indent}</${el.tag}>` }],
+      });
     }
   }
 }

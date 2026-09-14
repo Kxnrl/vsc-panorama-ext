@@ -4,70 +4,19 @@ import { parseVcss } from '../core/vcss/parser';
 import { symbolsOfVxml, symbolsOfVcss } from '../core/index/symbols';
 import { WorkspaceIndex } from '../core/index/workspace-index';
 
-/**
- * 全量扫描与 watcher 用的 glob。导出供测试直接验证两种工作区形态。
- *
- * 判据落在 `layout/` 与 `styles/` 这两个真正标识 Panorama 内容的路径段上，
- * **不要求路径里出现 `panorama/` 段**——`workspace.findFiles` 匹配的是
- * 「相对工作区文件夹」的路径，**文件夹名本身不在里面**。用户把
- * `.../content/csgo/panorama`（或某个 addon 的 `panorama/`）直接开成工作区根
- * 时，相对路径形如 `20260716/styles/x.css`，一个 `panorama` 段都没有：旧的
- * `**​/panorama/**​/styles/**` 在这种形态下扫到 0 个文件、watcher 也永不触发，
- * 全部跨文件能力静默降级为空且毫无提示。把 `panorama/` 嵌在工作区里的形态
- * 相对路径是 `panorama/styles/x.css`，同样落在 `styles/` 下，一条 glob 覆盖
- * 两种形态。
- *
- * 放宽只到这一步为止：`layout/` 之外的 `.xml`、`styles/` 之外的 `.css` 仍然
- * 进不来。顺带也让索引的判据与 `panorama.customHudLayout.include` 的默认 glob
- * （`**​/layout/custom_game/**`，同样不要求 panorama 段）对齐，不再出现
- * 「严格模式生效了、索引却是空的」这种自相矛盾的状态。
- *
- * glob 只是第一道闸——它拦不住混合仓库里的 `res/layout/*.xml`、
- * `src/styles/*.css`，那些由 {@link isPanoramaContent} 这道后置过滤丢弃。
- */
-export const INDEX_GLOBS = [
-  '**/layout/**/*.{xml,vxml}',
-  '**/styles/**/*.{css,vcss}',
-] as const;
+import { INDEX_GLOBS as CORE_INDEX_GLOBS, isPanoramaContent as coreIsPanoramaContent } from '../core/index/discovery';
 
 /**
- * 路径里是否有独立的 `panorama` 段。
- *
- * 按段匹配而不是按子串：`panorama-tools/` 之类的目录不该被算成 Panorama 内容根。
- * 大小写不敏感——Windows 上路径大小写不区分，Panorama 与 panorama 是同一个
- * 目录，按大小写敏感去判会把一半用户静默漏掉，而这正是本轮要根除的失效模式。
+ * 判据本体（INDEX_GLOBS / isPanoramaContent / 段判定 isIndexCandidate）已下沉到
+ * core/index/discovery.ts——MCP daemon 与 vscode 适配层共用同一份，防止两条
+ * 扫描链各自演化后「扩展里能查到的符号、daemon 里查不到」。这里 re-export
+ * 保持既有导入路径（test/unit/vscode/index-host.test.ts）不变：搬定义不该让
+ * 测试跟着改。
  */
-function hasPanoramaSegment(path: string): boolean {
-  return /(^|\/)panorama(\/|$)/i.test(path);
-}
+export const INDEX_GLOBS = CORE_INDEX_GLOBS;
 
-/**
- * 后置过滤：这个文件算不算 Panorama 内容。
- *
- * {@link INDEX_GLOBS} 放宽到「`layout/` 或 `styles/` 之下」之后，混合仓库里
- * Android 的 `res/layout/*.xml`、Web 的 `src/styles/*.css` 也会命中，索引会被
- * 一堆无关类名污染——那等于把「索引恒空」这个静默失效换成「索引被污染」这个
- * 静默降级，不算真正解决。这里再要求路径里出现 `panorama` 段：
- *
- * - 根目录就是 `panorama/`（或某个 addon 的 `panorama/`）→ 工作区文件夹自身
- *   路径含 `panorama` 段 → 收下（Important 3 修好）；
- * - `panorama/` 嵌在工作区里 → 文件路径含 `panorama` 段 → 收下（原有形态不变）；
- * - 混合仓库的 `res/layout/x.xml`、`src/styles/y.css` → 都不含 → 丢弃。
- *
- * 判据只写了一条而不是「文件路径 ∨ 工作区文件夹自身路径」两条，是因为**这里拿到
- * 的是 `uri.fsPath`（绝对路径）**，工作区文件夹自身路径必然是它的前缀——第一种
- * 形态下文件的绝对路径 `X:/archive/panorama/20260716/styles/x.css` 本来
- * 就含 `panorama` 段。两条判据在绝对路径下逐例等价（含
- * `panorama-tools/myapp/src/styles/y.css` 这种否定例：两条都不命中），多写一条
- * 只会留下一段永远为假、因而无法被测试证伪的分支。
- *
- * 调用点只有一处（{@link createIndexHost} 里的 `ingest`），首次全量扫描与
- * watcher 的 create/change 都走它——两条路径必须共用同一个判定，否则 watcher 会
- * 把扫描时丢弃的文件重新塞回索引（与 Task 4「删除被防抖静默撤销」同型）。
- */
-export function isPanoramaContent(path: string): boolean {
-  return hasPanoramaSegment(path.replace(/\\/g, '/'));
-}
+/** 同上：转发 core 的判据，注释见 core/index/discovery.ts。 */
+export const isPanoramaContent = coreIsPanoramaContent;
 
 const DEBOUNCE_MS = 300;
 

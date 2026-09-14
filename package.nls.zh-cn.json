@@ -10,5 +10,8 @@
   "panorama.diagnostics.unresolvedReference.description": "@define 常量或 @keyframes 关键帧引用不到定义的级别",
   "panorama.diagnostics.webOnlySyntax.description": "Web CSS 专有写法（display/float/flex、position 关键字、vw/vh/em/rem、::伪元素、visibility: hidden、--自定义属性、@keyframes 名字不加引号、box-shadow 颜色在前、background-size: clip_then_cover）的级别",
   "panorama.index.enabled.description": "关闭后跨文件能力（class 跨文件补全、跳转定义、查找引用）降级为单文件能力",
-  "panorama.index.exclude.description": "索引时额外排除的 glob，追加在内置的 node_modules 排除之后"
+  "panorama.index.exclude.description": "索引时额外排除的 glob，追加在内置的 node_modules 排除之后",
+  "panorama.mcp.enable.title": "为 AI 助手启用 MCP",
+  "panorama.mcp.enabled.description": "运行内嵌 MCP 服务（各窗口共享的 localhost 守护进程），让 Claude Code、Claude Desktop、Cursor、VS Code Agent 等 AI 助手可以校验 Panorama 文件、查询面板与属性数据。所有窗口与客户端 90 秒无活动时守护进程自动退出",
+  "panorama.mcp.port.description": "MCP 守护进程在 127.0.0.1 上的端口。一个守护进程服务所有工作区；客户端配置 http://127.0.0.1:<端口>/mcp"
 }

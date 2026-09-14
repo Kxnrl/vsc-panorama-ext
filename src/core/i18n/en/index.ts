@@ -3,5 +3,6 @@ import { ui } from './ui';
 import { vcss } from './vcss';
 import { vxml } from './vxml';
 import { hud } from './hud';
+import { mcp } from './mcp';
 
-export const en: Messages = { vcss, vxml, hud, ui };
+export const en: Messages = { vcss, vxml, hud, ui, mcp };

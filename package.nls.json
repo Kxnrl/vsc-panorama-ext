@@ -10,5 +10,8 @@
   "panorama.diagnostics.unresolvedReference.description": "Level for an @define constant or @keyframes reference whose definition cannot be resolved",
   "panorama.diagnostics.webOnlySyntax.description": "Level for Web-only CSS constructs: display/float/flex, position keywords, vw/vh/em/rem, :: pseudo-elements, visibility: hidden, -- custom properties, unquoted @keyframes names, color-first box-shadow, background-size: clip_then_cover",
   "panorama.index.enabled.description": "When off, cross-file features (cross-file class completion, go to definition, find references) fall back to single-file behaviour",
-  "panorama.index.exclude.description": "Extra globs to exclude while indexing, appended after the built-in node_modules exclusion"
+  "panorama.index.exclude.description": "Extra globs to exclude while indexing, appended after the built-in node_modules exclusion",
+  "panorama.mcp.enable.title": "Enable MCP for AI Assistants",
+  "panorama.mcp.enabled.description": "Run the embedded MCP server (a localhost daemon shared by every window) so AI assistants such as Claude Code, Claude Desktop, Cursor and the VS Code agent can validate Panorama files and query panel/property data. The daemon exits on its own when no window and no client has used it for 90 seconds",
+  "panorama.mcp.port.description": "Port of the MCP daemon on 127.0.0.1. One daemon serves every workspace; clients configure http://127.0.0.1:<port>/mcp"
 }

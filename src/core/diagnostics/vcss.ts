@@ -59,23 +59,79 @@ function webOnlyFixFor(prop: string, props: PropertyRegistry, msg: Messages): st
   return undefined;
 }
 
+/**
+ * transition 简写的机械化拆分。只认**单段、形态规整**的写法
+ * （`transition: width 0.5s ease-out`）：属性名、一个时长、可选 timing、
+ * 可选第二个时长（delay）。逗号分隔的多段简写或含 cubic-bezier/steps
+ * 函数的，形态不再是唯一解，不产出 edits——文字版 fix 仍然给出。
+ */
+const TIMING_KEYWORDS = new Set(['ease', 'linear', 'ease-in', 'ease-out', 'ease-in-out', 'step-start', 'step-end']);
+const TIME_VALUE_RE = /^[-+.]?\d[\d.]*m?s$/;
+
+function transitionSplitEdit(
+  text: string,
+  decl: VcssDeclaration,
+): readonly { start: number; end: number; text: string }[] | undefined {
+  if (decl.property !== 'transition' || decl.value.includes(',')) return undefined;
+
+  const tokens = tokenizeValue(decl.value);
+  if (tokens.length === 0) return undefined;
+
+  // 首段必是属性名（标识符形态）；其后至多两个时长与一个 timing 关键字
+  const [propToken, ...rest] = tokens;
+  if (!/^[-\w]+$/.test(propToken)) return undefined;
+
+  let duration = '0s';
+  let timing = 'ease';
+  let delay = '0s';
+  let timingSeen = false;
+  const seenTimes: string[] = [];
+  for (const t of rest) {
+    if (TIME_VALUE_RE.test(t)) {
+      seenTimes.push(t);
+      continue;
+    }
+    if (TIMING_KEYWORDS.has(t)) {
+      if (timingSeen) return undefined; // 两个 timing 关键字，形态不唯一
+      timing = t;
+      timingSeen = true;
+      continue;
+    }
+    return undefined; // cubic-bezier(...) / steps(...) / 未知 token：不猜
+  }
+  if (seenTimes.length > 0) duration = seenTimes[0];
+  if (seenTimes.length > 1) delay = seenTimes[1];
+  if (seenTimes.length > 2) return undefined;
+
+  // 缩进取声明所在行的行首空白，拆出的三行与原声明对齐
+  const lineStart = text.lastIndexOf('\n', decl.propertyStart) + 1;
+  const indent = /^[ \t]*/.exec(text.slice(lineStart, decl.propertyStart))![0];
+
+  const replacement =
+    `transition-property: ${propToken};\n${indent}transition-duration: ${duration};\n` +
+    `${indent}transition-timing-function: ${timing};\n${indent}transition-delay: ${delay}`;
+  // 覆盖整条声明（属性名到取值末尾）；行尾原有的 ';' 落在区间外，恰好留给最后一行
+  return [{ start: decl.propertyStart, end: decl.valueEnd, text: replacement }];
+}
+
 function checkWebOnlyProperty(
   decl: VcssDeclaration,
+  text: string,
   props: PropertyRegistry,
   msg: Messages,
   out: Diagnostic[],
 ): void {
   const fix = webOnlyFixFor(decl.property, props, msg);
   if (fix === undefined) return;
-  out.push(
-    mk(
-      'vcss.webOnlyProperty',
-      decl.propertyStart,
-      decl.propertyEnd,
-      msg.vcss.webOnlyProperty(decl.property),
-      fix,
-    ),
+  const edits = transitionSplitEdit(text, decl);
+  const base = mk(
+    'vcss.webOnlyProperty',
+    decl.propertyStart,
+    decl.propertyEnd,
+    msg.vcss.webOnlyProperty(decl.property),
+    fix,
   );
+  out.push(edits ? { ...base, edits } : base);
 }
 
 // ---------------------------------------------------------------------------
@@ -176,15 +232,16 @@ function checkPseudoElement(rule: VcssRule, msg: Messages, out: Diagnostic[]): v
 
 function checkVisibilityHidden(decl: VcssDeclaration, msg: Messages, out: Diagnostic[]): void {
   if (decl.property !== 'visibility' || decl.value !== 'hidden') return;
-  out.push(
-    mk(
+  out.push({
+    ...mk(
       'vcss.visibilityHidden',
       decl.valueStart,
       decl.valueEnd,
       msg.vcss.visibilityHidden(),
       msg.vcss.visibilityHiddenFix(),
     ),
-  );
+    edits: [{ start: decl.valueStart, end: decl.valueEnd, text: 'collapse' }],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -254,15 +311,16 @@ function checkCustomPropertyVarUsage(
 
 function checkKeyframesQuoting(kf: VcssKeyframes, msg: Messages, out: Diagnostic[]): void {
   if (kf.quoted) return;
-  out.push(
-    mk(
+  out.push({
+    ...mk(
       'vcss.keyframesUnquoted',
       kf.nameStart,
       kf.nameEnd,
       msg.vcss.keyframesUnquoted(kf.name),
       msg.vcss.keyframesUnquotedFix(kf.name),
     ),
-  );
+    edits: [{ start: kf.nameStart, end: kf.nameEnd, text: `"${kf.name}"` }],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -307,9 +365,35 @@ function checkBoxShadowColorFirst(
   if (decl.property !== 'box-shadow') return;
   const tokens = tokenizeValue(decl.value);
   let i = 0;
-  while (i < tokens.length && BOX_SHADOW_SKIP.has(tokens[i])) i++;
+  const leading: string[] = [];
+  while (i < tokens.length && BOX_SHADOW_SKIP.has(tokens[i])) {
+    leading.push(tokens[i]);
+    i++;
+  }
   const first = tokens[i];
   if (first === undefined || !LOOKS_LENGTHISH.test(first)) return;
+
+  // 机械化重排只认规范形：[fill|hollow|inset]* 长度串+ 单一尾token=颜色。
+  // 尾部还有其它非长度 token（Web 允许 inset 收尾）时形态不唯一，只给文字版。
+  const rest = tokens.slice(i);
+  const color = rest[rest.length - 1];
+  if (color !== undefined && !LOOKS_LENGTHISH.test(color) && !BOX_SHADOW_SKIP.has(color)) {
+    const lengths = rest.slice(0, -1);
+    if (lengths.every((t) => LOOKS_LENGTHISH.test(t))) {
+      const reordered = [...leading, color, ...lengths].join(' ');
+      out.push({
+        ...mk(
+          'vcss.boxShadowColorFirst',
+          decl.valueStart,
+          decl.valueEnd,
+          msg.vcss.boxShadowColorFirst(),
+          msg.vcss.boxShadowColorFirstFix(),
+        ),
+        edits: [{ start: decl.valueStart, end: decl.valueEnd, text: reordered }],
+      });
+      return;
+    }
+  }
   out.push(
     mk(
       'vcss.boxShadowColorFirst',
@@ -442,7 +526,7 @@ export function checkVcssWarnings(
       checkPseudoElement(rule, msg, out);
       for (const raw of rule.declarations) {
         const decl = withCanonicalProperty(raw, props, msg);
-        checkWebOnlyProperty(decl, props, msg, out);
+        checkWebOnlyProperty(decl, doc.text, props, msg, out);
         checkPositionKeyword(decl, msg, out);
         checkWebUnit(decl.value, decl.valueStart, msg, out);
         checkVisibilityHidden(decl, msg, out);

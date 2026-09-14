@@ -1,6 +1,7 @@
 import type { HudMessages } from './types-hud';
 import type { VxmlMessages } from './types-vxml';
 import type { VcssMessages } from './types-vcss';
+import type { McpMessages } from './types-mcp';
 
 /**
  * 面向用户的全部文案，按域分成四组。
@@ -61,9 +62,12 @@ export type { VxmlMessages } from './types-vxml';
 
 export type { HudMessages } from './types-hud';
 
+export type { McpMessages } from './types-mcp';
+
 export interface Messages {
   readonly vcss: VcssMessages;
   readonly vxml: VxmlMessages;
   readonly hud: HudMessages;
   readonly ui: UiMessages;
+  readonly mcp: McpMessages;
 }

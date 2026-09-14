@@ -1,8 +1,8 @@
 import type { VxmlAttribute, VxmlDocument, VxmlElement } from '../vxml/ast';
 import { CUSTOM_HUD_ALLOWED_STRUCTURAL, CUSTOM_HUD_WHITELIST, customHudAttributesOf } from '../mode';
-import type { Diagnostic, RuleId } from './types';
+import type { Diagnostic, FixEdit, RuleId } from './types';
 import type { Messages } from '../i18n/types';
-import { judgeableAttributes, tagNameSettled } from './vxml';
+import { attributeSpan, judgeableAttributes, tagNameSettled } from './vxml';
 
 /**
  * 规格 §10.3 的七条 CustomHudLayout 白名单 **error**。
@@ -123,6 +123,7 @@ const EVENT_ATTR_PREFIX = 'on';
 
 
 function checkAttribute(
+  text: string,
   el: VxmlElement,
   attr: VxmlAttribute,
   msg: Messages,
@@ -158,15 +159,38 @@ function checkAttribute(
   }
   // H-A3：Button 上的 text —— 规格 §10.3 明确要它单独成条
   else if (el.tag === 'Button' && attr.name === 'text') {
-    out.push(
-      mkError(
+    // 机械化修复（原子双编辑）：
+    //  1) 删掉 text 属性；
+    //  2) 自闭合的 `<Button … />` 展开成 `<Button …><Label text="X" /></Button>`
+    //     （额外删掉那个 `/`），已配对的在开始标签后插入子 <Label>。
+    // 两处必须一起上——只删属性会把按钮文字弄丢。
+    const span = attributeSpan(text, attr);
+    const edits: FixEdit[] = [{ start: span.start, end: span.end, text: '' }];
+    const label = `<Label text="${attr.value ?? ''}" />`;
+    if (el.selfClosing && el.openEnd >= 2) {
+      // 从 '>' 向左找自闭合的 '/'（允许 `<Button … />` 的空格），连它前面的
+      // 空白一起删——否则展开后留下 `<Button >` 这种尾巴
+      let i = el.openEnd - 2;
+      while (i > el.tagNameEnd && /[ \t]/.test(text[i])) i--;
+      if (text[i] === '/') {
+        let wsStart = i;
+        while (wsStart > el.tagNameEnd && /[ \t]/.test(text[wsStart - 1])) wsStart--;
+        edits.push({ start: wsStart, end: i + 1, text: '' });
+        edits.push({ start: el.openEnd - 1, end: el.openEnd, text: `>${label}</Button>` });
+      }
+    } else if (el.openEnd >= 0) {
+      edits.push({ start: el.openEnd, end: el.openEnd, text: label });
+    }
+    out.push({
+      ...mkError(
         'hud.buttonText',
         attr.nameStart,
         attr.nameEnd,
         msg.hud.buttonText(),
         msg.hud.buttonTextFix(),
       ),
-    );
+      ...(edits.length > 1 ? { edits } : {}),
+    });
   }
   // H-A4：该面板白名单之外的属性（**逐面板**判定，不是四张表的并集）
   else if (!allowed.includes(attr.name)) {
@@ -188,15 +212,17 @@ function checkAttribute(
   let m: RegExpExecArray | null;
   while ((m = FORBIDDEN_BINDING_RE.exec(attr.value)) !== null) {
     const start = attr.valueStart + m.index;
-    out.push(
-      mkError(
+    out.push({
+      ...mkError(
         'hud.binding',
         start,
         start + m[0].length,
         msg.hud.binding(m[0]),
         msg.hud.bindingFix(),
       ),
-    );
+      // 前缀置换：诊断区间恰好只盖 `{d:` 这四个字符，变量名原样保留
+      edits: [{ start, end: start + m[0].length, text: '{s:' }],
+    });
   }
 }
 
@@ -265,7 +291,7 @@ function checkElement(
 
   // H-A0（通则）：身份未定的属性不判——未闭合元素的末尾属性（Ruling 22）与语法
   // 坏掉的属性（Ruling 24）合成同一个入口，与 §10.1 / §10.2 共用同一份判据
-  for (const attr of judgeableAttributes(text, el)) checkAttribute(el, attr, msg, out);
+  for (const attr of judgeableAttributes(text, el)) checkAttribute(text, el, attr, msg, out);
 }
 
 // ---------------------------------------------------------------------------

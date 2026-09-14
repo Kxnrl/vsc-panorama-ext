@@ -69,7 +69,7 @@ function modeOf(doc: vscode.TextDocument) {
  * core 层的诊断带的是**文档绝对字符偏移**（规格：行列转换只在适配层做）。
  * 这里是全项目唯一一处偏移 -> 行列的换算。
  */
-function toVscode(doc: vscode.TextDocument, d: CoreDiagnostic): vscode.Diagnostic {
+export function toVscode(doc: vscode.TextDocument, d: CoreDiagnostic): vscode.Diagnostic {
   // positionAt 是 VSCode 自己的行列换算，与编辑器缓冲区逐字一致。绝不能自己
   // 数换行——文档里的换行形态、代理对都会让手写的换算与编辑器错位。
   const range = new vscode.Range(doc.positionAt(d.start), doc.positionAt(d.end));
@@ -78,6 +78,23 @@ function toVscode(doc: vscode.TextDocument, d: CoreDiagnostic): vscode.Diagnosti
   out.source = 'panorama';
   out.code = d.ruleId;
   return out;
+}
+
+/**
+ * 某文档此刻的 core 诊断（已过配置开关，保留 edits 字段）。
+ * 诊断宿主与灯泡 provider 共用这一份计算——两处各算一遍，
+ * 「波浪线说有、灯泡说没有」这种分叉迟早出现。
+ */
+export function coreDiagnosticsFor(doc: vscode.TextDocument, index: WorkspaceIndex): CoreDiagnostic[] {
+  const uri = doc.uri.fsPath.replace(/\\/g, '/');
+  const text = doc.getText();
+  const raw =
+    doc.languageId === 'panorama-vxml'
+      ? diagnoseVxml(parseVxml(text), {
+          uri, mode: modeOf(doc), panels, observed, index, msg: MSG,
+        })
+      : diagnoseVcss(parseVcss(text), { uri, props, index, msg: MSG });
+  return applySettings(raw, readDiagnosticSettings());
 }
 
 export function createDiagnosticsHost(
@@ -91,23 +108,7 @@ export function createDiagnosticsHost(
 
   const compute = (doc: vscode.TextDocument): void => {
     if (!isPanoramaDocument(doc)) return;
-    const uri = doc.uri.fsPath.replace(/\\/g, '/');
-    const text = doc.getText();
-    const raw =
-      doc.languageId === 'panorama-vxml'
-        ? diagnoseVxml(parseVxml(text), {
-            uri,
-            mode: modeOf(doc),
-            panels,
-            observed,
-            index,
-            msg: MSG,
-          })
-        : diagnoseVcss(parseVcss(text), { uri, props, index, msg: MSG });
-    collection.set(
-      doc.uri,
-      applySettings(raw, readDiagnosticSettings()).map((d) => toVscode(doc, d)),
-    );
+    collection.set(doc.uri, coreDiagnosticsFor(doc, index).map((d) => toVscode(doc, d)));
   };
 
   const schedule = (doc: vscode.TextDocument): void => {

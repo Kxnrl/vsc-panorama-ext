@@ -8,9 +8,9 @@ describe('activate', () => {
     activate({ subscriptions: [] } as never);
   });
 
-  it('为两种语言各注册补全、悬停、文档符号、跳转定义与查找引用', () => {
+  it('为两种语言各注册补全、悬停、文档符号、跳转定义、查找引用与灯泡', () => {
     for (const language of ['panorama-vxml', 'panorama-vcss']) {
-      for (const type of ['completion', 'hover', 'symbol', 'definition', 'reference']) {
+      for (const type of ['completion', 'hover', 'symbol', 'definition', 'reference', 'codeaction']) {
         expect(
           registered.some((r) => r.language === language && r.type === type),
           `${language} 缺少 ${type} provider`,

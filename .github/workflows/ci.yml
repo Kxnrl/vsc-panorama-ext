@@ -6,7 +6,49 @@ name: CI
 on:
   push:
     branches: [master, main]
+    # 文档-only 变更（README / CHANGELOG / LICENSE）不构建：真正的构建输入
+    # 都列在下面。清单本身与工作流文件也算输入——改了它们等于改了构建。
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'tools/**'
+      - 'data/**'
+      - 'examples/**'
+      - 'syntaxes/**'
+      - 'snippets/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'package.nls.json'
+      - 'package.nls.zh-cn.json'
+      - 'tsconfig.json'
+      - 'vitest.config.ts'
+      - 'esbuild.mjs'
+      - 'esbuild-e2e.mjs'
+      - 'language-configuration-vxml.json'
+      - 'language-configuration-vcss.json'
+      - '.vscodeignore'
+      - '.github/workflows/ci.yml'
   pull_request:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'tools/**'
+      - 'data/**'
+      - 'examples/**'
+      - 'syntaxes/**'
+      - 'snippets/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'package.nls.json'
+      - 'package.nls.zh-cn.json'
+      - 'tsconfig.json'
+      - 'vitest.config.ts'
+      - 'esbuild.mjs'
+      - 'esbuild-e2e.mjs'
+      - 'language-configuration-vxml.json'
+      - 'language-configuration-vcss.json'
+      - '.vscodeignore'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
 
 permissions:
@@ -16,9 +58,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # 22 而不是 20：test/unit/core/strip-types.test.ts 用的
           # node:module.stripTypeScriptTypes 是 Node 22.13+ 才有的 API，
@@ -44,6 +86,14 @@ jobs:
       # 才暴露得出来。vscode:prepublish 会在这一步里跑构建。
       - name: Package
         run: npm run package -- --out vsc-panorama-ext.vsix
+
+      # 与 release.yml 同一道守卫：VSIX 里必须带 MCP daemon。esbuild 双入口
+      # 配坏或 .vscodeignore 误排 dist/ 时，构建与单测都可能照常绿——发版
+      # 工作流里有这道，CI 里再放一道，问题在 push 时就红，别等到打 tag。
+      - name: VSIX 必须包含 MCP daemon
+        run: |
+          npx --yes @vscode/vsce@3 ls | grep -q '^dist/mcp-daemon\.cjs$' \
+            || { echo '::error::VSIX 里没有 dist/mcp-daemon.cjs——MCP 通道会整个缺失'; exit 1; }
 
       - name: Show package contents
         run: npx --yes @vscode/vsce@3 ls

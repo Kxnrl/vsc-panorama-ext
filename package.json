@@ -29,14 +29,13 @@
     "modding"
   ],
   "engines": {
-    "vscode": "^1.85.0",
+    "vscode": "^1.101.0",
     "node": ">=22.13"
   },
   "private": true,
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onLanguage:panorama-vxml",
-    "onLanguage:panorama-vcss"
+    "onStartupFinished"
   ],
   "contributes": {
     "languages": [
@@ -91,6 +90,19 @@
         "path": "./snippets/vcss.json"
       }
     ],
+    "commands": [
+      {
+        "command": "panorama.mcp.enable",
+        "title": "%panorama.mcp.enable.title%",
+        "category": "CS2 Panorama"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "panorama.mcp",
+        "label": "CS2 Panorama"
+      }
+    ],
     "configuration": {
       "title": "CS2 Panorama",
       "properties": {
@@ -111,6 +123,18 @@
           },
           "default": [],
           "description": "%panorama.contentRoots.description%"
+        },
+        "panorama.mcp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%panorama.mcp.enabled.description%"
+        },
+        "panorama.mcp.port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 4377,
+          "description": "%panorama.mcp.port.description%"
         },
         "panorama.index.enabled": {
           "type": "boolean",
@@ -230,9 +254,10 @@
     "gen:values": "node --experimental-strip-types tools/mine-css-values.mts && node --experimental-strip-types tools/mine-vxml-attributes.mts"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.0.0",
-    "@types/vscode": "1.85.0",
+    "@types/vscode": "1.101.0",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.24.0",
     "minimatch": "^10.2.6",
